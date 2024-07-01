@@ -70,7 +70,7 @@ RETURN {start: label, type: property, end: toString(other_node)} AS output
 """
 
 
-class Neo4jPGStore(PropertyGraphStore):
+class Neo4jPropertyGraphStore(PropertyGraphStore):
     r"""
     Neo4j Property Graph Store.
 
@@ -102,10 +102,10 @@ class Neo4jPGStore(PropertyGraphStore):
 
         ```python
         from llama_index.core.indices.property_graph import PropertyGraphIndex
-        from llama_index.graph_stores.neo4j import Neo4jLPGStore
+        from llama_index.graph_stores.neo4j import Neo4jPropertyGraphStore
 
-        # Create a Neo4jLPGStore instance
-        graph_store = Neo4jLPGStore(
+        # Create a Neo4jPropertyGraphStore instance
+        graph_store = Neo4jPropertyGraphStore(
             username="neo4j",
             password="neo4j",
             url="bolt://localhost:7687",
@@ -310,7 +310,9 @@ class Neo4jPGStore(PropertyGraphStore):
             """
             UNWIND $data AS row
             MERGE (source {id: row.source_id})
+            ON CREATE SET source:Chunk
             MERGE (target {id: row.target_id})
+            ON CREATE SET target:Chunk
             WITH source, target, row
             CALL apoc.merge.relationship(source, row.label, {}, row.properties, target) YIELD rel
             RETURN count(*)
@@ -350,11 +352,14 @@ class Neo4jPGStore(PropertyGraphStore):
         cypher_statement += return_statement
 
         response = self.structured_query(cypher_statement, param_map=params)
+        response = response if response else []
 
         nodes = []
         for record in response:
-            if "text" in record["properties"]:
-                text = record["properties"].pop("text")
+            # text indicates a chunk node
+            # none on the type indicates an implicit node, likely a chunk node
+            if "text" in record["properties"] or record["type"] is None:
+                text = record["properties"].pop("text", "")
                 nodes.append(
                     ChunkNode(
                         id_=record["name"],
@@ -425,6 +430,7 @@ class Neo4jPGStore(PropertyGraphStore):
         cypher_statement += return_statement
 
         data = self.structured_query(cypher_statement, param_map=params)
+        data = data if data else []
 
         triples = []
         for record in data:
@@ -478,6 +484,7 @@ class Neo4jPGStore(PropertyGraphStore):
             """,
             param_map={"ids": ids, "limit": limit},
         )
+        response = response if response else []
 
         ignore_rels = ignore_rels or []
         for record in response:
@@ -521,14 +528,26 @@ class Neo4jPGStore(PropertyGraphStore):
         self, query: VectorStoreQuery, **kwargs: Any
     ) -> Tuple[List[LabelledNode], List[float]]:
         """Query the graph store with a vector store query."""
+        conditions = None
+        if query.filters:
+            conditions = [
+                f"e.{filter.key} {filter.operator.value} {filter.value}"
+                for filter in query.filters.filters
+            ]
+        filters = (
+            f" {query.filters.condition.value} ".join(conditions).replace("==", "=")
+            if conditions is not None
+            else "1 = 1"
+        )
+
         data = self.structured_query(
-            """MATCH (e:`__Entity__`)
-            WHERE e.embedding IS NOT NULL AND size(e.embedding) = $dimension
+            f"""MATCH (e:`__Entity__`)
+            WHERE e.embedding IS NOT NULL AND size(e.embedding) = $dimension AND ({filters})
             WITH e, vector.similarity.cosine(e.embedding, $embedding) AS score
             ORDER BY score DESC LIMIT toInteger($limit)
             RETURN e.id AS name,
                [l in labels(e) WHERE l <> '__Entity__' | l][0] AS type,
-               e{.* , embedding: Null, name: Null, id: Null} AS properties,
+               e{{.* , embedding: Null, name: Null, id: Null}} AS properties,
                score""",
             param_map={
                 "embedding": query.query_embedding,
@@ -536,6 +555,7 @@ class Neo4jPGStore(PropertyGraphStore):
                 "limit": query.similarity_top_k,
             },
         )
+        data = data if data else []
 
         nodes = []
         scores = []
@@ -863,3 +883,6 @@ class Neo4jPGStore(PropertyGraphStore):
                 "\n".join(formatted_rels),
             ]
         )
+
+
+Neo4jPGStore = Neo4jPropertyGraphStore

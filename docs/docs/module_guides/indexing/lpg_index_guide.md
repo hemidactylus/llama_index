@@ -214,7 +214,7 @@ Explicitly declaring the retriever allows you to customize several options. Here
 ```python
 from llama_index.core.indices.property_graph import LLMSynonymRetriever
 
-DEFAULT_SYNONYM_EXPAND_TEMPLATE = (
+prompt = (
     "Given some initial query, generate synonyms or related keywords up to {max_keywords} in total, "
     "considering possible cases of capitalization, pluralization, common expressions, etc.\n"
     "Provide all synonyms/keywords separated by '^' symbols: 'keyword1^keyword2^...'\n"
@@ -305,7 +305,7 @@ cypher_retriever = TextToCypherRetriever(
     text_to_cypher_template=DEFAULT_TEXT_TO_CYPHER_TEMPLATE,
     # customize how the cypher result is inserted into
     # a text node. Requires `query` and `response` template args
-    response_template=DEFAULT_RESPONSE_TEMPLAT,
+    response_template=DEFAULT_RESPONSE_TEMPLATE,
     # an optional callable that can clean/verify generated cypher
     cypher_validator=None,
     # allowed fields in the resulting
@@ -357,6 +357,8 @@ Currently, supported graph stores for property graphs include:
 |---------------------|-----------|--------------------------|-------|-----------------------|
 | SimplePropertyGraphStore | ✅         | ❌                        | ❌     | Disk                  |
 | Neo4jPropertyGraphStore  | ❌         | ✅                        | ❌     | Server                |
+| NebulaPropertyGraphStore | ❌         | ❌                        | ❌     | Server                |
+| TiDBPropertyGraphStore   | ❌         | ✅                        | ❌     | Server                |
 
 ### Saving to/from disk
 
@@ -392,7 +394,7 @@ This example shows how you might save/load a property graph index using Neo4j an
 ```python
 from llama_index.core import StorageContext, load_index_from_storage
 from llama_index.core.indices import PropertyGraphIndex
-from llama_index.graph_stores.neo4j import Neo4jPGStore
+from llama_index.graph_stores.neo4j import Neo4jPropertyGraphStore
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient, AsyncQdrantClient
 
@@ -402,7 +404,7 @@ vector_store = QdrantVectorStore(
     aclient=AsyncQdrantClient(...),
 )
 
-graph_store = Neo4jPGStore(
+graph_store = Neo4jPropertyGraphStore(
     username="neo4j",
     password="<password>",
     url="bolt://localhost:7687",
@@ -605,6 +607,7 @@ Below, you can find some example notebooks showcasing the `PropertyGraphIndex`
 
 - [Basic Usage](../../examples/property_graph/property_graph_basic.ipynb)
 - [Using Neo4j](../../examples/property_graph/property_graph_neo4j.ipynb)
+- [Using Nebula](../../examples/property_graph/property_graph_nebula.ipynb)
 - [Advanced Usage with Neo4j and local models](../../examples/property_graph/property_graph_advanced.ipynb)
 - [Using a Property Graph Store](../../examples/property_graph/graph_store.ipynb)
 - [Creating a Custom Graph Retriever](../../examples/property_graph/property_graph_custom_retriever.ipynb)
