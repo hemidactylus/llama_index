@@ -341,8 +341,8 @@ class BaseNode(BaseComponent):
         Errors if embedding is None.
 
         """
-        if self.embedding is None:
-            raise ValueError("embedding not set.")
+        # if self.embedding is None:
+        #     raise ValueError("embedding not set.")
         return self.embedding
 
     def as_related_node_info(self) -> RelatedNodeInfo:

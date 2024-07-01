@@ -28,7 +28,7 @@ class EmbeddingEndEvent(BaseEvent):
     """
 
     chunks: List[str]
-    embeddings: List[List[float]]
+    embeddings: List[List[float] | None]
 
     @classmethod
     def class_name(cls):

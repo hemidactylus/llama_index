@@ -18,7 +18,7 @@ from llama_index.core.utils import get_tqdm_iterable
 from llama_index.core.async_utils import run_jobs
 
 # TODO: change to numpy array
-Embedding = List[float]
+Embedding = List[float] | None
 
 
 from llama_index.core.instrumentation.events.embedding import (
@@ -182,8 +182,11 @@ class BaseEmbedding(TransformComponent, DispatcherSpanMixin):
     ) -> Embedding:
         """Get aggregated embedding from multiple queries."""
         query_embeddings = [self.get_query_embedding(query) for query in queries]
-        agg_fn = agg_fn or mean_agg
-        return agg_fn(query_embeddings)
+        if all(q_e is None for q_e in query_embeddings):
+            return None
+        else:
+            agg_fn = agg_fn or mean_agg
+            return agg_fn(query_embeddings)
 
     async def aget_agg_embedding_from_queries(
         self,
