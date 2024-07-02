@@ -52,7 +52,6 @@ _DEFERRED_EMBEDDING = None
 
 
 class DeferredEmbedding(BaseEmbedding):
-
     def _get_query_embedding(self, query: str) -> Embedding:
         return _DEFERRED_EMBEDDING
 
@@ -64,7 +63,10 @@ class DeferredEmbedding(BaseEmbedding):
 
     async def _aget_text_embeddings(self, texts: List[str]) -> List[Embedding]:
         return [_DEFERRED_EMBEDDING for _ in texts]
+
+
 ##
+
 
 class AstraDBVectorStore(BasePydanticVectorStore):
     """
@@ -259,7 +261,6 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                 node_content = node.get_content(metadata_mode=MetadataMode.NONE)
                 document_to_insert = {
                     "_id": node.node_id,
-                    "content": node_content,
                     "metadata": metadata,
                     "$vectorize": node_content,
                 }
@@ -415,7 +416,6 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             # Get the scores associated with each
             top_k_scores = [match["$similarity"] for match in matches]
         elif query.mode == VectorStoreQueryMode.MMR:
-
             # TODO: vectorize for mmr
 
             # Querying a larger number of vectors and then doing MMR on them.
@@ -486,7 +486,12 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                 match["metadata"]["_node_content"] = json.dumps(match)
 
             # Create a new node object from the node metadata
-            node = metadata_dict_to_node(match["metadata"], text=match["content"])
+            if self._service is None:
+                node = metadata_dict_to_node(match["metadata"], text=match["content"])
+            else:
+                node = metadata_dict_to_node(
+                    match["metadata"], text=match["$vectorize"]
+                )
 
             # Append to the respective lists
             top_k_nodes.append(node)
