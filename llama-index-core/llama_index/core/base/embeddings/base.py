@@ -13,12 +13,17 @@ from llama_index.core.constants import (
     DEFAULT_EMBED_BATCH_SIZE,
 )
 from llama_index.core.instrumentation import DispatcherSpanMixin
-from llama_index.core.schema import BaseNode, MetadataMode, TransformComponent
+from llama_index.core.schema import (
+    BaseNode,
+    MetadataMode,
+    TransformComponent,
+    EmbeddingDeferred,
+)
 from llama_index.core.utils import get_tqdm_iterable
 from llama_index.core.async_utils import run_jobs
 
 # TODO: change to numpy array
-Embedding = List[float] | None
+Embedding = List[float] | EmbeddingDeferred
 
 
 from llama_index.core.instrumentation.events.embedding import (
@@ -40,7 +45,12 @@ class SimilarityMode(str, Enum):
 
 def mean_agg(embeddings: List[Embedding]) -> Embedding:
     """Mean aggregation for embeddings."""
-    return np.array(embeddings).mean(axis=0).tolist()
+    if len(embeddings) > 1:
+        assert (not isinstance(emb, EmbeddingDeferred) for emb in embeddings)
+        return np.array(embeddings).mean(axis=0).tolist()
+    else:
+        # caution about [] (is it even possible?)
+        return embeddings[0]
 
 
 def similarity(
@@ -182,11 +192,15 @@ class BaseEmbedding(TransformComponent, DispatcherSpanMixin):
     ) -> Embedding:
         """Get aggregated embedding from multiple queries."""
         query_embeddings = [self.get_query_embedding(query) for query in queries]
-        if all(q_e is None for q_e in query_embeddings):
-            return None
-        else:
+        if len(query_embeddings) > 1:
+            assert all(
+                not isinstance(emb, EmbeddingDeferred) for emb in query_embeddings
+            )
             agg_fn = agg_fn or mean_agg
             return agg_fn(query_embeddings)
+        else:
+            # need to worry about [] ?
+            return query_embeddings[0]
 
     async def aget_agg_embedding_from_queries(
         self,

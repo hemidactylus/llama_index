@@ -179,6 +179,10 @@ class RelatedNodeInfo(BaseComponent):
 RelatedNodeType = Union[RelatedNodeInfo, List[RelatedNodeInfo]]
 
 
+class EmbeddingDeferred(BaseModel):
+    text: str = Field()
+
+
 # Node classes for indexes
 class BaseNode(BaseComponent):
     """Base node Object.
@@ -195,7 +199,7 @@ class BaseNode(BaseComponent):
     id_: str = Field(
         default_factory=lambda: str(uuid.uuid4()), description="Unique ID of the node."
     )
-    embedding: Optional[List[float]] = Field(
+    embedding: Optional[List[float] | EmbeddingDeferred] = Field(
         default=None, description="Embedding of the node."
     )
 
@@ -335,14 +339,10 @@ class BaseNode(BaseComponent):
         )
         return f"Node ID: {self.node_id}\n{source_text_wrapped}"
 
-    def get_embedding(self) -> List[float]:
-        """Get embedding.
-
-        Errors if embedding is None.
-
-        """
-        # if self.embedding is None:
-        #     raise ValueError("embedding not set.")
+    def get_embedding(self) -> List[float] | EmbeddingDeferred:
+        """Get embedding."""
+        if self.embedding is None:
+            raise ValueError("embedding not set.")
         return self.embedding
 
     def as_related_node_info(self) -> RelatedNodeInfo:

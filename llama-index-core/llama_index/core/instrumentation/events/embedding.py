@@ -1,6 +1,7 @@
 from typing import List
 
 from llama_index.core.instrumentation.events.base import BaseEvent
+from llama_index.core.schema import EmbeddingDeferred
 
 
 class EmbeddingStartEvent(BaseEvent):
@@ -28,7 +29,7 @@ class EmbeddingEndEvent(BaseEvent):
     """
 
     chunks: List[str]
-    embeddings: List[List[float] | None]
+    embeddings: List[List[float] | EmbeddingDeferred]
 
     @classmethod
     def class_name(cls):

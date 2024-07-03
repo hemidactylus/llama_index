@@ -20,7 +20,7 @@ from astrapy.info import CollectionVectorServiceOptions
 import llama_index.core
 from llama_index.core.bridge.pydantic import PrivateAttr
 from llama_index.core.indices.query.embedding_utils import get_top_k_mmr_embeddings
-from llama_index.core.schema import BaseNode, MetadataMode
+from llama_index.core.schema import BaseNode, MetadataMode, EmbeddingDeferred
 from llama_index.core.vector_stores.types import (
     BasePydanticVectorStore,
     ExactMatchFilter,
@@ -46,23 +46,21 @@ NON_INDEXED_FIELDS = ["metadata._node_content", "content"]
 
 
 ##
-from llama_index.core.base.embeddings.base import BaseEmbedding, Embedding
-
-_DEFERRED_EMBEDDING = None
+from llama_index.core.base.embeddings.base import BaseEmbedding
 
 
-class DeferredEmbedding(BaseEmbedding):
-    def _get_query_embedding(self, query: str) -> Embedding:
-        return _DEFERRED_EMBEDDING
+class DeferringEmbedding(BaseEmbedding):
+    def _get_query_embedding(self, query: str) -> EmbeddingDeferred:
+        return EmbeddingDeferred(text=query)
 
-    async def _aget_query_embedding(self, query: str) -> Embedding:
-        return _DEFERRED_EMBEDDING
+    async def _aget_query_embedding(self, query: str) -> EmbeddingDeferred:
+        return EmbeddingDeferred(text=query)
 
-    def _get_text_embedding(self, text: str) -> Embedding:
-        return _DEFERRED_EMBEDDING
+    def _get_text_embedding(self, text: str) -> EmbeddingDeferred:
+        return EmbeddingDeferred(text=text)
 
-    async def _aget_text_embeddings(self, texts: List[str]) -> List[Embedding]:
-        return [_DEFERRED_EMBEDDING for _ in texts]
+    async def _aget_text_embeddings(self, texts: List[str]) -> List[EmbeddingDeferred]:
+        return [EmbeddingDeferred(text=text) for text in texts]
 
 
 ##
@@ -248,21 +246,21 @@ class AstraDBVectorStore(BasePydanticVectorStore):
 
             # One dictionary of node data per node
             node_embedding = node.get_embedding()
-            if node_embedding:
+            if isinstance(node_embedding, EmbeddingDeferred):
+                assert self._service is not None  # TODO: better
+                node_content = node.get_content(metadata_mode=MetadataMode.NONE)
+                document_to_insert = {
+                    "_id": node.node_id,
+                    "metadata": metadata,
+                    "$vectorize": node_embedding.text,
+                }
+            else:
                 assert self._service is None  # TODO: better
                 document_to_insert = {
                     "_id": node.node_id,
                     "content": node.get_content(metadata_mode=MetadataMode.NONE),
                     "metadata": metadata,
                     "$vector": node.get_embedding(),
-                }
-            else:
-                assert self._service is not None  # TODO: better
-                node_content = node.get_content(metadata_mode=MetadataMode.NONE)
-                document_to_insert = {
-                    "_id": node.node_id,
-                    "metadata": metadata,
-                    "$vectorize": node_content,
                 }
             documents_to_insert.append(document_to_insert)
 
@@ -396,9 +394,9 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             # Call the vector_find method of AstraPy
 
             sort_clause: Dict[str, Any]
-            if query_embedding is None:
+            if isinstance(query_embedding, EmbeddingDeferred):
                 assert self._service is not None  # TODO: better
-                sort_clause = {"$vectorize": query.query_str}
+                sort_clause = {"$vectorize": query_embedding.text}
             else:
                 assert self._service is None  # TODO: better
                 sort_clause = {"$vector": query_embedding}
@@ -416,8 +414,6 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             # Get the scores associated with each
             top_k_scores = [match["$similarity"] for match in matches]
         elif query.mode == VectorStoreQueryMode.MMR:
-            # TODO: vectorize for mmr
-
             # Querying a larger number of vectors and then doing MMR on them.
             if (
                 kwargs.get("mmr_prefetch_factor") is not None
@@ -438,15 +434,26 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             # Get the most we can possibly need to fetch
             prefetch_k = max(prefetch_k0, query.similarity_top_k)
 
-            # Call AstraPy to fetch them (similarity from DB not needed here)
-            prefetch_matches = list(
-                self._collection.find(
-                    filter=query_metadata,
-                    projection={"*": True},
-                    limit=prefetch_k,
-                    sort={"$vector": query_embedding},
-                )
+            sort_clause: Dict[str, Any]
+            if isinstance(query_embedding, EmbeddingDeferred):
+                assert self._service is not None  # TODO: better
+                sort_clause = {"$vectorize": query_embedding.text}
+            else:
+                assert self._service is None  # TODO: better
+                sort_clause = {"$vector": query_embedding}
+
+            # Get the `prefetch_k` top matches and ensure the vector comes back
+            prefetch_cursor = self._collection.find(
+                filter=query_metadata,
+                projection={"*": True},
+                limit=prefetch_k,
+                sort=sort_clause,
+                include_sort_vector=True,
             )
+            prefetch_matches = list(prefetch_cursor)
+            query_vector = prefetch_cursor.get_sort_vector()
+            if query_vector is None:
+                raise ValueError("Cannot retrieve the query vector from Astra DB")
 
             # Get the MMR threshold
             mmr_threshold = query.mmr_threshold or kwargs.get("mmr_threshold")
@@ -464,7 +471,7 @@ class AstraDBVectorStore(BasePydanticVectorStore):
 
             # Call the Llama utility function to get the top  k
             mmr_similarities, mmr_indices = get_top_k_mmr_embeddings(
-                query_embedding,
+                query_vector,
                 pf_match_embeddings,
                 similarity_top_k=query.similarity_top_k,
                 embedding_ids=pf_match_indices,
