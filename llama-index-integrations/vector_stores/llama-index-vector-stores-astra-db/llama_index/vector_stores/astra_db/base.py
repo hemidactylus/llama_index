@@ -44,6 +44,16 @@ REPLACE_DOCUMENTS_MAX_THREADS = 12
 
 NON_INDEXED_FIELDS = ["metadata._node_content", "content"]
 
+VECTORIZE_ERROR_MESSAGE = (
+    "Collections with a vectorize service cannot accept pre-computed "
+    "embeddings. Please switch to using `DeferringEmbedding`."
+)
+
+NONVECTORIZE_ERROR_MESSAGE = (
+    "Embeddings from `DeferringEmbedding` cannot be used on "
+    "collections without vectorize service."
+)
+
 
 ##
 from llama_index.core.base.embeddings.base import BaseEmbedding
@@ -248,7 +258,8 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             document_to_insert: Dict[str, Any]
             node_embedding = node.get_embedding()
             if isinstance(node_embedding, EmbeddingDeferred):
-                assert self._service is not None  # TODO: better
+                if self._service is None:
+                    raise ValueError(NONVECTORIZE_ERROR_MESSAGE)
                 node_content = node.get_content(metadata_mode=MetadataMode.NONE)
                 document_to_insert = {
                     "_id": node.node_id,
@@ -256,7 +267,8 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                     "$vectorize": node_embedding.text,
                 }
             else:
-                assert self._service is None  # TODO: better
+                if self._service is not None:
+                    raise ValueError(VECTORIZE_ERROR_MESSAGE)
                 document_to_insert = {
                     "_id": node.node_id,
                     "content": node.get_content(metadata_mode=MetadataMode.NONE),
@@ -394,10 +406,12 @@ class AstraDBVectorStore(BasePydanticVectorStore):
 
             sort_clause: Dict[str, Any]
             if isinstance(query.query_embedding, EmbeddingDeferred):
-                assert self._service is not None  # TODO: better
+                if self._service is None:
+                    raise ValueError(NONVECTORIZE_ERROR_MESSAGE)
                 sort_clause = {"$vectorize": query.query_embedding.text}
             else:
-                assert self._service is None  # TODO: better
+                if self._service is not None:
+                    raise ValueError(VECTORIZE_ERROR_MESSAGE)
                 sort_clause = {"$vector": cast(List[float], query.query_embedding)}
 
             matches = list(
@@ -435,10 +449,12 @@ class AstraDBVectorStore(BasePydanticVectorStore):
 
             sort_clause_mmr: Dict[str, Any]
             if isinstance(query.query_embedding, EmbeddingDeferred):
-                assert self._service is not None  # TODO: better
+                if self._service is None:
+                    raise ValueError(NONVECTORIZE_ERROR_MESSAGE)
                 sort_clause_mmr = {"$vectorize": query.query_embedding.text}
             else:
-                assert self._service is None  # TODO: better
+                if self._service is not None:
+                    raise ValueError(VECTORIZE_ERROR_MESSAGE)
                 sort_clause_mmr = {"$vector": cast(List[float], query.query_embedding)}
 
             # Get the `prefetch_k` top matches and ensure the vector comes back

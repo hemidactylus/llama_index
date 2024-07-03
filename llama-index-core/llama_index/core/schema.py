@@ -613,7 +613,7 @@ class NodeWithScore(BaseComponent):
         return self.node.metadata
 
     @property
-    def embedding(self) -> Optional[List[float]]:
+    def embedding(self) -> Optional[List[float] | EmbeddingDeferred]:
         return self.node.embedding
 
     def get_text(self) -> str:
@@ -625,7 +625,7 @@ class NodeWithScore(BaseComponent):
     def get_content(self, metadata_mode: MetadataMode = MetadataMode.NONE) -> str:
         return self.node.get_content(metadata_mode=metadata_mode)
 
-    def get_embedding(self) -> List[float]:
+    def get_embedding(self) -> List[float] | EmbeddingDeferred:
         return self.node.get_embedding()
 
 
