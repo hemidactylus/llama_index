@@ -245,6 +245,7 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             )
 
             # One dictionary of node data per node
+            document_to_insert: Dict[str, Any]
             node_embedding = node.get_embedding()
             if isinstance(node_embedding, EmbeddingDeferred):
                 assert self._service is not None  # TODO: better
@@ -260,7 +261,8 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                     "_id": node.node_id,
                     "content": node.get_content(metadata_mode=MetadataMode.NONE),
                     "metadata": metadata,
-                    "$vector": node.get_embedding(),
+                    # the following cannot be a EmbeddingDeferred in this flow
+                    "$vector": cast(List[float], node.get_embedding()),
                 }
             documents_to_insert.append(document_to_insert)
 
@@ -378,9 +380,6 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         if query.mode not in _available_query_modes:
             raise NotImplementedError(f"Query mode {query.mode} not available.")
 
-        # Get the query embedding
-        query_embedding = cast(List[float] | None, query.query_embedding)
-
         # Process the metadata filters as needed
         if query.filters is not None:
             query_metadata = self._query_filters_to_dict(query.filters)
@@ -394,12 +393,12 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             # Call the vector_find method of AstraPy
 
             sort_clause: Dict[str, Any]
-            if isinstance(query_embedding, EmbeddingDeferred):
+            if isinstance(query.query_embedding, EmbeddingDeferred):
                 assert self._service is not None  # TODO: better
-                sort_clause = {"$vectorize": query_embedding.text}
+                sort_clause = {"$vectorize": query.query_embedding.text}
             else:
                 assert self._service is None  # TODO: better
-                sort_clause = {"$vector": query_embedding}
+                sort_clause = {"$vector": cast(List[float], query.query_embedding)}
 
             matches = list(
                 self._collection.find(
@@ -434,20 +433,20 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             # Get the most we can possibly need to fetch
             prefetch_k = max(prefetch_k0, query.similarity_top_k)
 
-            sort_clause: Dict[str, Any]
-            if isinstance(query_embedding, EmbeddingDeferred):
+            sort_clause_mmr: Dict[str, Any]
+            if isinstance(query.query_embedding, EmbeddingDeferred):
                 assert self._service is not None  # TODO: better
-                sort_clause = {"$vectorize": query_embedding.text}
+                sort_clause_mmr = {"$vectorize": query.query_embedding.text}
             else:
                 assert self._service is None  # TODO: better
-                sort_clause = {"$vector": query_embedding}
+                sort_clause_mmr = {"$vector": cast(List[float], query.query_embedding)}
 
             # Get the `prefetch_k` top matches and ensure the vector comes back
             prefetch_cursor = self._collection.find(
                 filter=query_metadata,
                 projection={"*": True},
                 limit=prefetch_k,
-                sort=sort_clause,
+                sort=sort_clause_mmr,
                 include_sort_vector=True,
             )
             prefetch_matches = list(prefetch_cursor)
