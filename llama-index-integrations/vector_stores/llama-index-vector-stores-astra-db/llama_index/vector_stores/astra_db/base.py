@@ -94,6 +94,15 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         token (str): The Astra DB Application Token to use.
         api_endpoint (str): The Astra DB JSON API endpoint for your database.
         embedding_dimension (int): length of the embedding vectors in use.
+            Required when not using `service`.
+        service (astrapy.info.CollectionVectorServiceOptions): pass a valid service options
+            object to have the vector store leverage "Vectorize" to compute server-side
+            embeddings. To use this feature, it must come with the choice of the
+            `DeferringEmbedding` embedding model.
+        embedding_api_key (str): as an alternative to setting an API Key name in the
+            authentication part of the `service` parameter (which requires the API Key to
+            have been configured beforehand in the target Astra DB), for Vectorize collections
+            this parameter can be set to the vectorize service API Key.
         namespace (Optional[str]): The namespace to use. If not provided, 'default_keyspace'
 
     Examples:
@@ -111,13 +120,39 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         )
         ```
 
+        ```python
+        from astrapy.info import CollectionVectorServiceOptions
+
+        from llama_index.vector_stores.astra import AstraDBVectorStore, DeferringEmbedding
+        from llama_index.core import Settings
+
+        Settings.embed_model = DeferringEmbedding()
+
+        # Define a configuration for an Astra DB Vectorize-enabled collection
+        service_options = CollectionVectorServiceOptions(
+            provider="...",
+            model_name="...",
+            authentication={
+                "providerKey": "API_KEY_NAME",
+            },
+        )
+
+        # Create the Astra DB Vector Store object with a server-side Vectorize service
+        astra_db_store = AstraDBVectorStore(
+            collection_name="astra_v_store",
+            token=token,
+            api_endpoint=api_endpoint,
+            service=service_options,
+        )
+        ```
     """
 
     stores_text: bool = True
     flat_metadata: bool = True
 
-    _embedding_dimension: int = PrivateAttr()
+    _embedding_dimension: Optional[int] = PrivateAttr()
     _service: Optional[CollectionVectorServiceOptions] = PrivateAttr()
+    _embedding_api_key: Optional[str] = PrivateAttr()
     _database: Any = PrivateAttr()
     _collection: Any = PrivateAttr()
 
@@ -127,16 +162,25 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         collection_name: str,
         token: str,
         api_endpoint: str,
-        embedding_dimension: int,
+        embedding_dimension: Optional[int] = None,
         service: Optional[CollectionVectorServiceOptions] = None,
+        embedding_api_key: Optional[str] = None,
         namespace: Optional[str] = None,
         ttl_seconds: Optional[int] = None,
     ) -> None:
         super().__init__()
 
+        if embedding_dimension is None:
+            if service is None:
+                raise ValueError(
+                    "The `embedding_dimension` parameter is required "
+                    "if `service` is not provided."
+                )
+
         # Set all the required class parameters
         self._embedding_dimension = embedding_dimension
         self._service = service
+        self._embedding_api_key = embedding_api_key
 
         if ttl_seconds is not None:
             warn(
@@ -172,11 +216,10 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                 dimension=embedding_dimension,
                 indexing=collection_indexing,
                 service=self._service,
+                embedding_api_key=self._embedding_api_key,
                 check_exists=False,
             )
         except DataAPIException as e:
-            # TODO manage exists-with-different-config errors re: vectorize
-
             # possibly the collection is preexisting and has legacy
             # indexing settings: verify
             preexisting = [
