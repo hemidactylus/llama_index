@@ -15,6 +15,7 @@ from warnings import warn
 from astrapy import DataAPIClient
 from astrapy.exceptions import InsertManyException
 from astrapy.results import UpdateResult
+from astrapy.info import CollectionVectorServiceOptions
 
 import llama_index.core
 from llama_index.core.bridge.pydantic import PrivateAttr
@@ -62,6 +63,15 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         token (str): The Astra DB Application Token to use.
         api_endpoint (str): The Astra DB JSON API endpoint for your database.
         embedding_dimension (int): length of the embedding vectors in use.
+            Required when not using `service`.
+        service (astrapy.info.CollectionVectorServiceOptions): pass a valid service options
+            object to have the vector store leverage "Vectorize" to compute server-side
+            embeddings. To use this feature, it must come with the choice of the
+            `DeferringEmbedding` embedding model.
+        embedding_api_key (str): as an alternative to setting an API Key name in the
+            authentication part of the `service` parameter (which requires the API Key to
+            have been configured beforehand in the target Astra DB), for Vectorize collections
+            this parameter can be set to the vectorize service API Key.
         namespace (Optional[str]): The namespace to use. If not provided, 'default_keyspace'
 
     Examples:
@@ -79,12 +89,36 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         )
         ```
 
+        TODO fix the following
+        ```python
+        from astrapy.info import CollectionVectorServiceOptions
+        from llama_index.vector_stores.astra import AstraDBVectorStore, DeferringEmbedding
+        from llama_index.core import Settings
+        Settings.embed_model = DeferringEmbedding()
+        # Define a configuration for an Astra DB Vectorize-enabled collection
+        service_options = CollectionVectorServiceOptions(
+            provider="...",
+            model_name="...",
+            authentication={
+                "providerKey": "API_KEY_NAME",
+            },
+        )
+        # Create the Astra DB Vector Store object with a server-side Vectorize service
+        astra_db_store = AstraDBVectorStore(
+            collection_name="astra_v_store",
+            token=token,
+            api_endpoint=api_endpoint,
+            service=service_options,
+        )
+        ```
     """
 
     stores_text: bool = True
     flat_metadata: bool = True
 
-    _embedding_dimension: int = PrivateAttr()
+    _embedding_dimension: Optional[int] = PrivateAttr()
+    _service: Optional[CollectionVectorServiceOptions] = PrivateAttr()
+    _embedding_api_key: Optional[str] = PrivateAttr()
     _database: Any = PrivateAttr()
     _collection: Any = PrivateAttr()
 
@@ -94,14 +128,26 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         collection_name: str,
         token: str,
         api_endpoint: str,
-        embedding_dimension: int,
+        embedding_dimension: Optional[int] = None,
+        service: Optional[CollectionVectorServiceOptions] = None,
+        embedding_api_key: Optional[str] = None,
         namespace: Optional[str] = None,
         ttl_seconds: Optional[int] = None,
     ) -> None:
         super().__init__()
 
+        if embedding_dimension is None:
+            if service is None:
+                raise ValueError(
+                    "The `embedding_dimension` parameter is required "
+                    "if `service` is not provided."
+                )
+
         # Set all the required class parameters
         self._embedding_dimension = embedding_dimension
+        self._service = service
+        self.computes_embedding = self._service is not None
+        self._embedding_api_key = embedding_api_key
 
         if ttl_seconds is not None:
             warn(
@@ -136,6 +182,8 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                 name=collection_name,
                 dimension=embedding_dimension,
                 indexing=collection_indexing,
+                service=self._service,
+                embedding_api_key=self._embedding_api_key,
                 check_exists=False,
             )
         except DataAPIException as e:
@@ -217,14 +265,23 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             )
 
             # One dictionary of node data per node
-            documents_to_insert.append(
-                {
+            document_to_insert: Dict[str, Any]
+            if self.computes_embedding:
+                node_content = node.get_content(metadata_mode=MetadataMode.NONE)
+                document_to_insert = {
+                    "_id": node.node_id,
+                    "metadata": metadata,
+                    "$vectorize": node_embedding.text,
+                }
+            else:
+                document_to_insert = {
                     "_id": node.node_id,
                     "content": node.get_content(metadata_mode=MetadataMode.NONE),
                     "metadata": metadata,
-                    "$vector": node.get_embedding(),
+                    # TODO check this below
+                    "$vector": cast(List[float], node.get_embedding()),
                 }
-            )
+            documents_to_insert.append(document_to_insert)
 
         # Log the number of documents being added
         _logger.debug(f"Adding {len(documents_to_insert)} documents to the collection")
@@ -340,8 +397,16 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         if query.mode not in _available_query_modes:
             raise NotImplementedError(f"Query mode {query.mode} not available.")
 
-        # Get the query embedding
-        query_embedding = cast(List[float], query.query_embedding)
+        # Cast the query as an astrapy 'sort' clause
+        if self.computes_embedding:
+            # TODO refine this assert
+            assert query.query_str is not None
+            sort_clause = {"$vectorize": query.query_str}
+        else:
+            query_embedding = cast(List[float], query.query_embedding)
+            # TODO refine this assert
+            assert isinstance(query_embedding, list)
+            sort_clause = {"$vector": query_embedding}
 
         # Process the metadata filters as needed
         if query.filters is not None:
@@ -359,7 +424,7 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                     filter=query_metadata,
                     projection={"*": True},
                     limit=query.similarity_top_k,
-                    sort={"$vector": query_embedding},
+                    sort=sort_clause,
                     include_similarity=True,
                 )
             )
@@ -387,16 +452,18 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             # Get the most we can possibly need to fetch
             prefetch_k = max(prefetch_k0, query.similarity_top_k)
 
-            # Call AstraPy to fetch them (similarity from DB not needed here)
-            prefetch_matches = list(
-                self._collection.find(
-                    filter=query_metadata,
-                    projection={"*": True},
-                    limit=prefetch_k,
-                    sort={"$vector": query_embedding},
-                )
+            # Get the `prefetch_k` top matches and ensure the vector comes back
+            prefetch_cursor = self._collection.find(
+                filter=query_metadata,
+                projection={"*": True},
+                limit=prefetch_k,
+                sort=sort_clause,
+                include_sort_vector=True,
             )
-
+            prefetch_matches = list(prefetch_cursor)
+            query_vector = prefetch_cursor.get_sort_vector()
+            if query_vector is None:
+                raise ValueError("Cannot retrieve the query vector from Astra DB")
             # Get the MMR threshold
             mmr_threshold = query.mmr_threshold or kwargs.get("mmr_threshold")
 
@@ -413,7 +480,7 @@ class AstraDBVectorStore(BasePydanticVectorStore):
 
             # Call the Llama utility function to get the top  k
             mmr_similarities, mmr_indices = get_top_k_mmr_embeddings(
-                query_embedding,
+                query_vector,
                 pf_match_embeddings,
                 similarity_top_k=query.similarity_top_k,
                 embedding_ids=pf_match_indices,
@@ -435,7 +502,13 @@ class AstraDBVectorStore(BasePydanticVectorStore):
                 match["metadata"]["_node_content"] = json.dumps(match)
 
             # Create a new node object from the node metadata
-            node = metadata_dict_to_node(match["metadata"], text=match["content"])
+            node: BaseNode
+            if self.computes_embedding:
+                node = metadata_dict_to_node(
+                    match["metadata"], text=match["$vectorize"]
+                )
+            else:
+                node = metadata_dict_to_node(match["metadata"], text=match["content"])
 
             # Append to the respective lists
             top_k_nodes.append(node)
