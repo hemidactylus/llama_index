@@ -146,7 +146,7 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         # Set all the required class parameters
         self._embedding_dimension = embedding_dimension
         self._service = service
-        self.computes_embedding = self._service is not None
+        self.computes_embeddings = self._service is not None
         self._embedding_api_key = embedding_api_key
 
         if ttl_seconds is not None:
@@ -266,17 +266,17 @@ class AstraDBVectorStore(BasePydanticVectorStore):
 
             # One dictionary of node data per node
             document_to_insert: Dict[str, Any]
-            if self.computes_embedding:
-                node_content = node.get_content(metadata_mode=MetadataMode.NONE)
+            node_content = node.get_content(metadata_mode=MetadataMode.NONE)
+            if self.computes_embeddings:
                 document_to_insert = {
                     "_id": node.node_id,
                     "metadata": metadata,
-                    "$vectorize": node_embedding.text,
+                    "$vectorize": node_content,
                 }
             else:
                 document_to_insert = {
                     "_id": node.node_id,
-                    "content": node.get_content(metadata_mode=MetadataMode.NONE),
+                    "content": node_content,
                     "metadata": metadata,
                     # TODO check this below
                     "$vector": cast(List[float], node.get_embedding()),
@@ -398,7 +398,7 @@ class AstraDBVectorStore(BasePydanticVectorStore):
             raise NotImplementedError(f"Query mode {query.mode} not available.")
 
         # Cast the query as an astrapy 'sort' clause
-        if self.computes_embedding:
+        if self.computes_embeddings:
             # TODO refine this assert
             assert query.query_str is not None
             sort_clause = {"$vectorize": query.query_str}
@@ -503,7 +503,7 @@ class AstraDBVectorStore(BasePydanticVectorStore):
 
             # Create a new node object from the node metadata
             node: BaseNode
-            if self.computes_embedding:
+            if self.computes_embeddings:
                 node = metadata_dict_to_node(
                     match["metadata"], text=match["$vectorize"]
                 )

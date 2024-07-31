@@ -68,11 +68,17 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         """Initialize params."""
         self._use_async = use_async
         self._store_nodes_override = store_nodes_override
-        self._embed_model = (
-            resolve_embed_model(embed_model, callback_manager=callback_manager)
-            if embed_model
-            else embed_model_from_settings_or_context(Settings, service_context)
-        )
+        # TODO: better solution to this init-sequence riddle
+        # (some of this check anticipates/repeats a resolution happening in superclass)
+        _vstore = (storage_context or StorageContext.from_defaults()).vector_store
+        if _vstore and _vstore.computes_embeddings:
+            self._embed_model = None
+        else:
+            self._embed_model = (
+                resolve_embed_model(embed_model, callback_manager=callback_manager)
+                if embed_model
+                else embed_model_from_settings_or_context(Settings, service_context)
+            )
 
         self._insert_batch_size = insert_batch_size
         super().__init__(
@@ -142,15 +148,16 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         Embeddings are called in batches.
 
         """
-        id_to_embed_map = embed_nodes(
-            nodes, self._embed_model, show_progress=show_progress
-        )
+        if not self.vector_store.computes_embeddings:
+            id_to_embed_map = embed_nodes(
+                nodes, self._embed_model, show_progress=show_progress
+            )
 
         results = []
         for node in nodes:
-            embedding = id_to_embed_map[node.node_id]
             result = node.copy()
-            result.embedding = embedding
+            if not self.vector_store.computes_embeddings:
+                result.embedding = id_to_embed_map[node.node_id]
             results.append(result)
         return results
 
@@ -166,17 +173,18 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         Embeddings are called in batches.
 
         """
-        id_to_embed_map = await async_embed_nodes(
-            nodes=nodes,
-            embed_model=self._embed_model,
-            show_progress=show_progress,
-        )
+        if not self.vector_store.computes_embeddings:
+            id_to_embed_map = await async_embed_nodes(
+                nodes=nodes,
+                embed_model=self._embed_model,
+                show_progress=show_progress,
+            )
 
         results = []
         for node in nodes:
-            embedding = id_to_embed_map[node.node_id]
             result = node.copy()
-            result.embedding = embedding
+            if not self.vector_store.computes_embeddings:
+                result.embedding = id_to_embed_map[node.node_id]
             results.append(result)
         return results
 

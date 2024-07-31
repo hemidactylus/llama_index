@@ -318,7 +318,7 @@ class BasePydanticVectorStore(BaseComponent, ABC):
 
     stores_text: bool
     is_embedding_query: bool = True
-    computes_embedding: bool = False
+    computes_embeddings: bool = False
 
     class Config:
         arbitrary_types_allowed = True
