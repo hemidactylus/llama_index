@@ -68,7 +68,7 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         """Initialize params."""
         self._use_async = use_async
         self._store_nodes_override = store_nodes_override
-        # TODO: better solution to this init-sequence riddle
+        # TODO: devise a better solution to this init-sequence ourobouros riddle
         # (some of this check anticipates/repeats a resolution happening in superclass)
         _vstore = (storage_context or StorageContext.from_defaults()).vector_store
         if _vstore and _vstore.computes_embeddings:

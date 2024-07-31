@@ -89,12 +89,10 @@ class AstraDBVectorStore(BasePydanticVectorStore):
         )
         ```
 
-        TODO fix the following
         ```python
         from astrapy.info import CollectionVectorServiceOptions
-        from llama_index.vector_stores.astra import AstraDBVectorStore, DeferringEmbedding
-        from llama_index.core import Settings
-        Settings.embed_model = DeferringEmbedding()
+        from llama_index.vector_stores.astra import AstraDBVectorStore
+
         # Define a configuration for an Astra DB Vectorize-enabled collection
         service_options = CollectionVectorServiceOptions(
             provider="...",
